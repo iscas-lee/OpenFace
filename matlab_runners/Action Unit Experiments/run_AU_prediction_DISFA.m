@@ -1,28 +1,43 @@
 clear
-DISFA_dir = 'D:/Datasets/DISFA/Videos_LeftCamera/';
-clm_exe = '"../../x64/Release/FeatureExtraction.exe"';
+
+if(isunix)
+    executable = '"../../build/bin/FeatureExtraction"';
+else
+    executable = '"../../x64/Release/FeatureExtraction.exe"';
+end
+
+if(exist('D:/Datasets/DISFA/Videos_LeftCamera/', 'file'))   
+    DISFA_dir = 'D:/Datasets/DISFA/Videos_LeftCamera/';  
+elseif(exist('E:/Datasets/DISFA/Videos_LeftCamera/', 'file'))   
+    DISFA_dir = 'E:/Datasets/DISFA/Videos_LeftCamera/';  
+elseif(exist('/multicomp/datasets/face_datasets/DISFA/Videos_LeftCamera/', 'file'))
+    DISFA_dir = '/multicomp/datasets/face_datasets/DISFA/Videos_LeftCamera/';
+elseif(exist('/media/tadas/2EBEA130BEA0F20F/datasets/DISFA/', 'file'))
+    DISFA_dir = '/media/tadas/2EBEA130BEA0F20F/datasets/DISFA/Videos_LeftCamera/';
+else
+    fprintf('Cannot find DIFA location\n');
+end
+
 
 videos = dir([DISFA_dir, '*.avi']);
 
-output = 'AU_preds/';
+output = './AU_predictions/out_DISFA/';
 if(~exist(output, 'file'))
     mkdir(output);
 end
 
 %%
-% Do it in parrallel for speed (replace the parfor with for if no parallel
-% toolbox is available)
-parfor v = 1:numel(videos)
+for v = 1:numel(videos)
    
     vid_file = [DISFA_dir, videos(v).name];
     
-    [~, name, ~] = fileparts(vid_file);
-    
-    % where to output tracking results
-    output_file = [output name '_au.txt'];
-    command = [clm_exe ' -f "' vid_file '" -of "' output_file '" -q -no2Dfp -no3Dfp -noMparams -noPose -noGaze'];
+    command = sprintf('%s -f "%s" -out_dir "%s" -aus ', executable, vid_file, output);
         
-    dos(command);
+    if(isunix)
+        unix(command, '-echo');
+    else
+        dos(command);
+    end
     
 end
 
@@ -31,9 +46,8 @@ end
 % Note that DISFA was used in training, this is not meant for experimental
 % results but rather to show how to do AU prediction and how to interpret
 % the results
-
-Label_dir = 'D:/Datasets/DISFA/ActionUnit_Labels/';
-prediction_dir = 'AU_preds/';
+Label_dir = [DISFA_dir, '/../ActionUnit_Labels/'];
+prediction_dir = output;
 
 label_folders = dir([Label_dir, 'SN*']);
 
@@ -54,40 +68,42 @@ for i=1:numel(label_folders)
     label_ids = cat(1, label_ids, repmat(user_id, size(labels,1),1));
 end
 
-preds_files = dir([prediction_dir, '*SN*.txt']);
+preds_files = dir([prediction_dir, '*SN*.csv']);
 
 tab = readtable([prediction_dir, preds_files(1).name]);
 column_names = tab.Properties.VariableNames;
 aus_pred_int = [];
-for c=3:numel(column_names)
+au_inds_in_file = [];
+for c=1:numel(column_names)
     if(strfind(column_names{c}, '_r') > 0)
         aus_pred_int = cat(1, aus_pred_int, int32(str2num(column_names{c}(3:end-2))));
+        au_inds_in_file = cat(1, au_inds_in_file, c);
     end
 end
     
 inds_au = zeros(numel(AUs_disfa),1);
 
 for ind=1:numel(AUs_disfa)  
-    inds_au(ind) = find(aus_pred_int==AUs_disfa(ind));
+    inds_au(ind) = au_inds_in_file(aus_pred_int==AUs_disfa(ind));
 end
 preds_all = zeros(size(labels_all,1), numel(AUs_disfa));
 
 for i=1:numel(preds_files)
    
     preds = dlmread([prediction_dir, preds_files(i).name], ',', 1, 0);
-    preds = preds(:,5:5+numel(aus_pred_int)-1);
+    %preds = preds(:,5:5+numel(aus_pred_int)-1);
 
-    user_id = str2num(preds_files(i).name(end - 14:end-12));
+    user_id = str2num(preds_files(i).name(end - 11:end-9));
     rel_ids = label_ids == user_id;
     preds_all(rel_ids,:) = preds(:,inds_au);
 end
 
 %% now do the actual evaluation that the collection has been done
-f = fopen('DISFA_valid_res.txt', 'w');
+f = fopen('results/DISFA_valid_res.txt', 'w');
 au_res = zeros(1, numel(AUs_disfa));
 for au = 1:numel(AUs_disfa)
    [ accuracies, F1s, corrs, ccc, rms, classes ] = evaluate_au_prediction_results( preds_all(:,au), labels_all(:,au));
-   fprintf(f, 'AU%d results - corr %.3f, ccc - %.3f\n', AUs_disfa(au), corrs, ccc);
+   fprintf(f, 'AU%d results - corr %.3f, rms %.3f, ccc - %.3f\n', AUs_disfa(au), corrs, rms, ccc);
    au_res(au) = ccc;
 end
 fclose(f);

@@ -1,69 +1,49 @@
 ///////////////////////////////////////////////////////////////////////////////
-// Copyright (C) 2016, Carnegie Mellon University and University of Cambridge,
+// Copyright (C) 2017, Carnegie Mellon University and University of Cambridge,
 // all rights reserved.
 //
-// THIS SOFTWARE IS PROVIDED “AS IS” FOR ACADEMIC USE ONLY AND ANY EXPRESS
-// OR IMPLIED WARRANTIES WARRANTIES, INCLUDING, BUT NOT LIMITED TO,
-// THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
-// PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS OR CONTRIBUTORS
-// BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY.
-// OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
-// SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-// HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
-// STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
-// ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
-// POSSIBILITY OF SUCH DAMAGE.
+// ACADEMIC OR NON-PROFIT ORGANIZATION NONCOMMERCIAL RESEARCH USE ONLY
 //
-// Notwithstanding the license granted herein, Licensee acknowledges that certain components
-// of the Software may be covered by so-called “open source” software licenses (“Open Source
-// Components”), which means any software licenses approved as open source licenses by the
-// Open Source Initiative or any substantially similar licenses, including without limitation any
-// license that, as a condition of distribution of the software licensed under such license,
-// requires that the distributor make the software available in source code format. Licensor shall
-// provide a list of Open Source Components for a particular version of the Software upon
-// Licensee’s request. Licensee will comply with the applicable terms of such licenses and to
-// the extent required by the licenses covering Open Source Components, the terms of such
-// licenses will apply in lieu of the terms of this Agreement. To the extent the terms of the
-// licenses applicable to Open Source Components prohibit any of the restrictions in this
-// License Agreement with respect to such Open Source Component, such restrictions will not
-// apply to such Open Source Component. To the extent the terms of the licenses applicable to
-// Open Source Components require Licensor to make an offer to provide source code or
-// related information in connection with the Software, such offer is hereby made. Any request
-// for source code or related information should be directed to cl-face-tracker-distribution@lists.cam.ac.uk
-// Licensee acknowledges receipt of notices for the Open Source Components for the initial
-// delivery of the Software.
-
+// BY USING OR DOWNLOADING THE SOFTWARE, YOU ARE AGREEING TO THE TERMS OF THIS LICENSE AGREEMENT.  
+// IF YOU DO NOT AGREE WITH THESE TERMS, YOU MAY NOT USE OR DOWNLOAD THE SOFTWARE.
+//
+// License can be found in OpenFace-license.txt
+//
 //     * Any publications arising from the use of this software, including but
 //       not limited to academic journal and conference publications, technical
 //       reports and manuals, must cite at least one of the following works:
 //
-//       OpenFace: an open source facial behavior analysis toolkit
-//       Tadas Baltrušaitis, Peter Robinson, and Louis-Philippe Morency
-//       in IEEE Winter Conference on Applications of Computer Vision, 2016  
+//       OpenFace 2.0: Facial Behavior Analysis Toolkit
+//       Tadas Baltrušaitis, Amir Zadeh, Yao Chong Lim, and Louis-Philippe Morency
+//       in IEEE International Conference on Automatic Face and Gesture Recognition, 2018  
+//
+//       Convolutional experts constrained local model for facial landmark detection.
+//       A. Zadeh, T. Baltrušaitis, and Louis-Philippe Morency,
+//       in Computer Vision and Pattern Recognition Workshops, 2017.    
 //
 //       Rendering of Eyes for Eye-Shape Registration and Gaze Estimation
 //       Erroll Wood, Tadas Baltrušaitis, Xucong Zhang, Yusuke Sugano, Peter Robinson, and Andreas Bulling 
 //       in IEEE International. Conference on Computer Vision (ICCV),  2015 
 //
-//       Cross-dataset learning and person-speci?c normalisation for automatic Action Unit detection
+//       Cross-dataset learning and person-specific normalisation for automatic Action Unit detection
 //       Tadas Baltrušaitis, Marwa Mahmoud, and Peter Robinson 
 //       in Facial Expression Recognition and Analysis Challenge, 
 //       IEEE International Conference on Automatic Face and Gesture Recognition, 2015 
-//
-//       Constrained Local Neural Fields for robust facial landmark detection in the wild.
-//       Tadas Baltrušaitis, Peter Robinson, and Louis-Philippe Morency. 
-//       in IEEE Int. Conference on Computer Vision Workshops, 300 Faces in-the-Wild Challenge, 2013.    
 //
 ///////////////////////////////////////////////////////////////////////////////
 
 #include <Face_utils.h>
 
+#include <RotationHelpers.h>
+
 // OpenCV includes
 #include <opencv2/core/core.hpp>
 #include <opencv2/imgproc.hpp>
+#include <opencv2/calib3d.hpp>
 
 // For FHOG visualisation
 #include <dlib/opencv.h>
+#include <dlib/image_processing/frontal_face_detector.h>
 
 using namespace std;
 
@@ -71,12 +51,12 @@ namespace FaceAnalysis
 {
 
 	// Pick only the more stable/rigid points under changes of expression
-	void extract_rigid_points(cv::Mat_<double>& source_points, cv::Mat_<double>& destination_points)
+	void extract_rigid_points(cv::Mat_<float>& source_points, cv::Mat_<float>& destination_points)
 	{
 		if(source_points.rows == 68)
 		{
-			cv::Mat_<double> tmp_source = source_points.clone();
-			source_points = cv::Mat_<double>();
+			cv::Mat_<float> tmp_source = source_points.clone();
+			source_points = cv::Mat_<float>();
 
 			// Push back the rigid points (some face outline, eyes, and nose)
 			source_points.push_back(tmp_source.row(1));
@@ -104,8 +84,8 @@ namespace FaceAnalysis
 			source_points.push_back(tmp_source.row(46));
 			source_points.push_back(tmp_source.row(47));
 
-			cv::Mat_<double> tmp_dest = destination_points.clone();
-			destination_points = cv::Mat_<double>();
+			cv::Mat_<float> tmp_dest = destination_points.clone();
+			destination_points = cv::Mat_<float>();
 
 			// Push back the rigid points
 			destination_points.push_back(tmp_dest.row(1));
@@ -136,16 +116,16 @@ namespace FaceAnalysis
 	}
 
 	// Aligning a face to a common reference frame
-	void AlignFace(cv::Mat& aligned_face, const cv::Mat& frame, const LandmarkDetector::CLNF& clnf_model, bool rigid, double sim_scale, int out_width, int out_height)
+	void AlignFace(cv::Mat& aligned_face, const cv::Mat& frame, const cv::Mat_<float>& detected_landmarks, cv::Vec6f params_global, const LandmarkDetector::PDM& pdm, bool rigid, double sim_scale, int out_width, int out_height)
 	{
 		// Will warp to scaled mean shape
-		cv::Mat_<double> similarity_normalised_shape = clnf_model.pdm.mean_shape * sim_scale;
+		cv::Mat_<float> similarity_normalised_shape = pdm.mean_shape * sim_scale;
 	
 		// Discard the z component
 		similarity_normalised_shape = similarity_normalised_shape(cv::Rect(0, 0, 1, 2*similarity_normalised_shape.rows/3)).clone();
 
-		cv::Mat_<double> source_landmarks = clnf_model.detected_landmarks.reshape(1, 2).t();
-		cv::Mat_<double> destination_landmarks = similarity_normalised_shape.reshape(1, 2).t();
+		cv::Mat_<float> source_landmarks = detected_landmarks.reshape(1, 2).t();
+		cv::Mat_<float> destination_landmarks = similarity_normalised_shape.reshape(1, 2).t();
 
 		// Aligning only the more rigid points
 		if(rigid)
@@ -153,18 +133,18 @@ namespace FaceAnalysis
 			extract_rigid_points(source_landmarks, destination_landmarks);
 		}
 
-		cv::Matx22d scale_rot_matrix = LandmarkDetector::AlignShapesWithScale(source_landmarks, destination_landmarks);
-		cv::Matx23d warp_matrix;
+		cv::Matx22f scale_rot_matrix = Utilities::AlignShapesWithScale(source_landmarks, destination_landmarks);
+		cv::Matx23f warp_matrix;
 
 		warp_matrix(0,0) = scale_rot_matrix(0,0);
 		warp_matrix(0,1) = scale_rot_matrix(0,1);
 		warp_matrix(1,0) = scale_rot_matrix(1,0);
 		warp_matrix(1,1) = scale_rot_matrix(1,1);
 
-		double tx = clnf_model.params_global[4];
-		double ty = clnf_model.params_global[5];
+		float tx = params_global[4];
+		float ty = params_global[5];
 
-		cv::Vec2d T(tx, ty);
+		cv::Vec2f T(tx, ty);
 		T = scale_rot_matrix * T;
 
 		// Make sure centering is correct
@@ -175,16 +155,16 @@ namespace FaceAnalysis
 	}
 
 	// Aligning a face to a common reference frame
-	void AlignFaceMask(cv::Mat& aligned_face, const cv::Mat& frame, const LandmarkDetector::CLNF& clnf_model, const cv::Mat_<int>& triangulation, bool rigid, double sim_scale, int out_width, int out_height)
+	void AlignFaceMask(cv::Mat& aligned_face, const cv::Mat& frame, const cv::Mat_<float>& detected_landmarks, cv::Vec6f params_global, const LandmarkDetector::PDM& pdm, const cv::Mat_<int>& triangulation, bool rigid, double sim_scale, int out_width, int out_height)
 	{
 		// Will warp to scaled mean shape
-		cv::Mat_<double> similarity_normalised_shape = clnf_model.pdm.mean_shape * sim_scale;
+		cv::Mat_<float> similarity_normalised_shape = pdm.mean_shape * sim_scale;
 	
 		// Discard the z component
 		similarity_normalised_shape = similarity_normalised_shape(cv::Rect(0, 0, 1, 2*similarity_normalised_shape.rows/3)).clone();
 
-		cv::Mat_<double> source_landmarks = clnf_model.detected_landmarks.reshape(1, 2).t();
-		cv::Mat_<double> destination_landmarks = similarity_normalised_shape.reshape(1, 2).t();
+		cv::Mat_<float> source_landmarks = detected_landmarks.reshape(1, 2).t();
+		cv::Mat_<float> destination_landmarks = similarity_normalised_shape.reshape(1, 2).t();
 
 		// Aligning only the more rigid points
 		if(rigid)
@@ -192,18 +172,18 @@ namespace FaceAnalysis
 			extract_rigid_points(source_landmarks, destination_landmarks);
 		}
 
-		cv::Matx22d scale_rot_matrix = LandmarkDetector::AlignShapesWithScale(source_landmarks, destination_landmarks);
-		cv::Matx23d warp_matrix;
+		cv::Matx22f scale_rot_matrix = Utilities::AlignShapesWithScale(source_landmarks, destination_landmarks);
+		cv::Matx23f warp_matrix;
 
 		warp_matrix(0,0) = scale_rot_matrix(0,0);
 		warp_matrix(0,1) = scale_rot_matrix(0,1);
 		warp_matrix(1,0) = scale_rot_matrix(1,0);
 		warp_matrix(1,1) = scale_rot_matrix(1,1);
 
-		double tx = clnf_model.params_global[4];
-		double ty = clnf_model.params_global[5];
+		float tx = params_global[4];
+		float ty = params_global[5];
 
-		cv::Vec2d T(tx, ty);
+		cv::Vec2f T(tx, ty);
 		T = scale_rot_matrix * T;
 
 		// Make sure centering is correct
@@ -213,27 +193,27 @@ namespace FaceAnalysis
 		cv::warpAffine(frame, aligned_face, warp_matrix, cv::Size(out_width, out_height), cv::INTER_LINEAR);
 
 		// Move the destination landmarks there as well
-		cv::Matx22d warp_matrix_2d(warp_matrix(0,0), warp_matrix(0,1), warp_matrix(1,0), warp_matrix(1,1));
+		cv::Matx22f warp_matrix_2d(warp_matrix(0,0), warp_matrix(0,1), warp_matrix(1,0), warp_matrix(1,1));
 		
-		destination_landmarks = cv::Mat(clnf_model.detected_landmarks.reshape(1, 2).t()) * cv::Mat(warp_matrix_2d).t();
+		destination_landmarks = cv::Mat(detected_landmarks.reshape(1, 2).t()) * cv::Mat(warp_matrix_2d).t();
 
 		destination_landmarks.col(0) = destination_landmarks.col(0) + warp_matrix(0,2);
 		destination_landmarks.col(1) = destination_landmarks.col(1) + warp_matrix(1,2);
 		
 		// Move the eyebrows up to include more of upper face
-		destination_landmarks.at<double>(0,1) -= 15; 
-		destination_landmarks.at<double>(16,1) -= 15; 
+		destination_landmarks.at<float>(0,1) -= (30/0.7)*sim_scale;
+		destination_landmarks.at<float>(16,1) -= (30 / 0.7)*sim_scale;
 
-		destination_landmarks.at<double>(17,1) -= 7; 
-		destination_landmarks.at<double>(18,1) -= 7; 
-		destination_landmarks.at<double>(19,1) -= 7; 
-		destination_landmarks.at<double>(20,1) -= 7; 
-		destination_landmarks.at<double>(21,1) -= 7; 
-		destination_landmarks.at<double>(22,1) -= 7; 
-		destination_landmarks.at<double>(23,1) -= 7; 
-		destination_landmarks.at<double>(24,1) -= 7; 
-		destination_landmarks.at<double>(25,1) -= 7; 
-		destination_landmarks.at<double>(26,1) -= 7; 
+		destination_landmarks.at<float>(17,1) -= (30 / 0.7)*sim_scale;
+		destination_landmarks.at<float>(18,1) -= (30 / 0.7)*sim_scale;
+		destination_landmarks.at<float>(19,1) -= (30 / 0.7)*sim_scale;
+		destination_landmarks.at<float>(20,1) -= (30 / 0.7)*sim_scale;
+		destination_landmarks.at<float>(21,1) -= (30 / 0.7)*sim_scale;
+		destination_landmarks.at<float>(22,1) -= (30 / 0.7)*sim_scale;
+		destination_landmarks.at<float>(23,1) -= (30 / 0.7)*sim_scale;
+		destination_landmarks.at<float>(24,1) -= (30 / 0.7)*sim_scale;
+		destination_landmarks.at<float>(25,1) -= (30 / 0.7)*sim_scale;
+		destination_landmarks.at<float>(26,1) -= (30 / 0.7)*sim_scale;
 
 		destination_landmarks = cv::Mat(destination_landmarks.t()).reshape(1, 1).t();
 
@@ -249,7 +229,7 @@ namespace FaceAnalysis
 
 		for(size_t i = 0; i < aligned_face_channels.size(); ++i)
 		{
-			aligned_face_channels[i] = aligned_face_channels[i].mul(paw.pixel_mask);
+			cv::multiply(aligned_face_channels[i], paw.pixel_mask, aligned_face_channels[i], 1.0, CV_8U);
 		}
 
 		if(aligned_face.channels() == 3)
@@ -261,30 +241,6 @@ namespace FaceAnalysis
 		{
 			aligned_face = aligned_face_channels[0];
 		}
-	}
-
-
-	void Visualise_FHOG(const cv::Mat_<double>& descriptor, int num_rows, int num_cols, cv::Mat& visualisation)
-	{
-
-		// First convert to dlib format
-		dlib::array2d<dlib::matrix<float,31,1> > hog(num_rows, num_cols);
-		
-		cv::MatConstIterator_<double> descriptor_it = descriptor.begin();
-		for(int y = 0; y < num_cols; ++y)
-		{
-			for(int x = 0; x < num_rows; ++x)
-			{
-				for(unsigned int o = 0; o < 31; ++o)
-				{
-					hog[y][x](o) = *descriptor_it++;
-				}
-			}
-		}
-
-		// Draw the FHOG to OpenCV format
-		auto fhog_vis = dlib::draw_fhog(hog);
-		visualisation = dlib::toMat(fhog_vis).clone();
 	}
 
 	// Create a row vector Felzenszwalb HOG descriptor from a given image
@@ -378,5 +334,96 @@ namespace FaceAnalysis
 
 		new_descriptor.copyTo(descriptors.row(row_to_change));
 	}	
+
+	//============================================================================
+	// Matrix reading functionality
+	//============================================================================
+
+	// Reading in a matrix from a stream
+	void ReadMat(std::ifstream& stream, cv::Mat &output_mat)
+	{
+		// Read in the number of rows, columns and the data type
+		int row, col, type;
+
+		stream >> row >> col >> type;
+
+		output_mat = cv::Mat(row, col, type);
+
+		switch (output_mat.type())
+		{
+		case CV_64FC1:
+		{
+			cv::MatIterator_<double> begin_it = output_mat.begin<double>();
+			cv::MatIterator_<double> end_it = output_mat.end<double>();
+
+			while (begin_it != end_it)
+			{
+				stream >> *begin_it++;
+			}
+		}
+		break;
+		case CV_32FC1:
+		{
+			cv::MatIterator_<float> begin_it = output_mat.begin<float>();
+			cv::MatIterator_<float> end_it = output_mat.end<float>();
+
+			while (begin_it != end_it)
+			{
+				stream >> *begin_it++;
+			}
+		}
+		break;
+		case CV_32SC1:
+		{
+			cv::MatIterator_<int> begin_it = output_mat.begin<int>();
+			cv::MatIterator_<int> end_it = output_mat.end<int>();
+			while (begin_it != end_it)
+			{
+				stream >> *begin_it++;
+			}
+		}
+		break;
+		case CV_8UC1:
+		{
+			cv::MatIterator_<uchar> begin_it = output_mat.begin<uchar>();
+			cv::MatIterator_<uchar> end_it = output_mat.end<uchar>();
+			while (begin_it != end_it)
+			{
+				stream >> *begin_it++;
+			}
+		}
+		break;
+		default:
+			printf("ERROR(%s,%d) : Unsupported Matrix type %d!\n", __FILE__, __LINE__, output_mat.type()); abort();
+
+
+		}
+	}
+
+	void ReadMatBin(std::ifstream& stream, cv::Mat &output_mat)
+	{
+		// Read in the number of rows, columns and the data type
+		int row, col, type;
+
+		stream.read((char*)&row, 4);
+		stream.read((char*)&col, 4);
+		stream.read((char*)&type, 4);
+
+		output_mat = cv::Mat(row, col, type);
+		int size = output_mat.rows * output_mat.cols * output_mat.elemSize();
+		stream.read((char *)output_mat.data, size);
+
+	}
+
+	// Skipping lines that start with # (together with empty lines)
+	void SkipComments(std::ifstream& stream)
+	{
+		while (stream.peek() == '#' || stream.peek() == '\n' || stream.peek() == ' ' || stream.peek() == '\r')
+		{
+			std::string skipped;
+			std::getline(stream, skipped);
+		}
+	}
+
 
 }

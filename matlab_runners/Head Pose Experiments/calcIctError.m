@@ -1,10 +1,10 @@
-function [meanError, all_rot_preds, all_rot_gts, meanErrors, all_errors, rels_all] = calcIctError(resDir, gtDir)
+function [meanError, all_rot_preds, all_rot_gts, meanErrors, all_errors, rels_all, seq_ids] = calcIctError(resDir, gtDir)
 %CALCICTERROR Summary of this function goes here
 %   Detailed explanation goes here
 
     polhemus = 'polhemusNorm.csv';
 
-    sequences = dir([resDir '*.txt']);
+    sequences = dir([resDir '*.csv']);
 
     rotMeanErr = zeros(numel(sequences),3);
     rotRMS = zeros(numel(sequences),3);
@@ -13,16 +13,30 @@ function [meanError, all_rot_preds, all_rot_gts, meanErrors, all_errors, rels_al
 
     rels_all = [];
 
+    seq_ids = {};
+
     for i = 1:numel(sequences)
 
         [~, name,~] = fileparts(sequences(i).name);
-        [frame t, rels, sc tx ty tz rx ry rz] = textread([resDir '/' sequences(i).name], '%f, %f, %f, %f, %f, %f, %f, %f, %f, %f', 'headerlines', 1);
-        [txg tyg tzg rxg ryg rzg] =  textread([gtDir name '/'  polhemus], '%f,%f,%f,%f,%f,%f');
 
+        fname = [resDir '/' sequences(i).name];
+        if(i == 1)
+            % First read in the column names
+            tab = readtable(fname);
+            column_names = tab.Properties.VariableNames;
+
+            confidence_id = cellfun(@(x) ~isempty(x) && x==1, strfind(column_names, 'confidence'));
+            rot_ids = cellfun(@(x) ~isempty(x) && x==1, strfind(column_names, 'pose_R'));
+        end
+
+        all_params  = dlmread(fname, ',', 1, 0);
+
+        rot{i} = all_params(:, rot_ids);    
+        rels = all_params(:, confidence_id);
+        
         % the reliabilities of head pose
         rels_all = cat(1, rels_all, rels);
-
-        rot{i} = [rx ry rz];
+        [txg tyg tzg rxg ryg rzg] =  textread([gtDir name '/'  polhemus], '%f,%f,%f,%f,%f,%f');
         
         rotg{i} = [rxg ryg rzg];
         
@@ -53,7 +67,9 @@ function [meanError, all_rot_preds, all_rot_gts, meanErrors, all_errors, rels_al
         % Now compute the errors
         rotMeanErr(i,:) = mean(abs((rot{i}(:,:)-rotg{i}(:,:))));
         rotRMS(i,:) = sqrt(mean(((rot{i}(:,:)-rotg{i}(:,:))).^2)); 
-        
+            
+        seq_ids = cat(1, seq_ids, repmat({[name 'ict']}, size(rot{i},1), 1));
+            
     end
     allRot = cell2mat(rot');
     allRotg = cell2mat(rotg');
